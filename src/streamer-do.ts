@@ -94,37 +94,77 @@ export class StreamerDO implements DurableObject {
   }
 
   private async createClient(): Promise<any> {
-    // mtcute is platform-agnostic; @mtcute/web should provide web-friendly crypto + WebSocket transport
-    // If you get a build error here, check mtcute docs for the correct imports for your installed versions.
+    // IMPORTANT: In Cloudflare Workers we must explicitly provide storage, transport, crypto and platform
+    // to @mtcute/core, otherwise it will throw at runtime.
     const { TelegramClient } = await import("@mtcute/core/client.js");
-
-    // best-effort imports from @mtcute/web (API may vary a bit between versions)
     const web = await import("@mtcute/web");
-    const storageMod = await import("@mtcute/core/storage/index.js").catch(() => null);
 
-    const cryptoProvider =
-      (web as any).WebCryptoProvider ? new (web as any).WebCryptoProvider() :
-      (web as any).CryptoProvider ? new (web as any).CryptoProvider() :
-      (web as any).WasmCryptoProvider ? new (web as any).WasmCryptoProvider() :
-      null;
+    const CryptoCls =
+      (web as any).WebCryptoProvider ??
+      (web as any).CryptoProvider ??
+      (web as any).WasmCryptoProvider;
 
-    if (!cryptoProvider) {
-      throw new Error("Could not find a crypto provider in @mtcute/web. Check mtcute docs and update imports.");
+    const TransportCls =
+      (web as any).WebSocketTransport ??
+      (web as any).TransportWebSocket;
+
+    const PlatformCls =
+      (web as any).WebPlatform ??
+      (web as any).PlatformWeb;
+
+    if (!CryptoCls) {
+      throw new Error("Could not find a crypto provider in @mtcute/web (expected WebCryptoProvider).");
+    }
+    if (!TransportCls) {
+      throw new Error("Could not find a WebSocket transport in @mtcute/web (expected WebSocketTransport).");
+    }
+    if (!PlatformCls) {
+      throw new Error("Could not find a platform implementation in @mtcute/web (expected WebPlatform).");
     }
 
-    const transportFactory =
-      (web as any).WebSocketTransport ? (() => new (web as any).WebSocketTransport()) :
-      (web as any).TransportWebSocket ? (() => new (web as any).TransportWebSocket()) :
-      null;
-
-    if (!transportFactory) {
-      throw new Error("Could not find WebSocket transport in @mtcute/web. Check mtcute docs and update imports.");
+    const crypto = new CryptoCls();
+    // some providers need async init (safe no-op if missing)
+    if (typeof (crypto as any).initialize === "function") {
+      await (crypto as any).initialize();
     }
 
-    const StorageClass =
-      (storageMod as any)?.MemoryStorage || (web as any).MemoryStorage || null;
+    const transport = new TransportCls();
+    const platform = new PlatformCls();
 
-    const storage = StorageClass ? new StorageClass() : undefined;
+    // We prefer an in-memory storage provider to avoid IndexedDB/SQLite assumptions.
+    // This keeps the session within the Durable Object lifetime.
+    let storage: any | undefined;
+    const storageImportCandidates = [
+      "@mtcute/core",
+      "@mtcute/core/storage/index.js",
+      "@mtcute/core/storage/memory",
+      "@mtcute/core/storage/memory.js",
+      "@mtcute/core/storage/memory/index.js",
+    ] as const;
+
+    for (const spec of storageImportCandidates) {
+      try {
+        const mod: any = await import(spec as any);
+        const StorageCls =
+          mod?.MemoryStorage ??
+          mod?.InMemoryStorage ??
+          mod?.MemoryStorageProvider ??
+          mod?.MemorySessionStorage;
+        if (StorageCls) {
+          storage = new StorageCls();
+          break;
+        }
+      } catch {
+        // ignore and try next
+      }
+    }
+
+    if (!storage) {
+      throw new Error(
+        "Could not find an in-memory storage provider (MemoryStorage) in @mtcute/core. " +
+          "Please update mtcute packages or adjust imports."
+      );
+    }
 
     const apiId = Number(this.env.API_ID);
     const apiHash = this.env.API_HASH;
@@ -132,9 +172,12 @@ export class StreamerDO implements DurableObject {
     const tg = new TelegramClient({
       apiId,
       apiHash,
-      crypto: cryptoProvider,
+      crypto,
+      platform,
+      transport,
       storage,
-      transport: transportFactory,
+      // we only use MTProto to fetch file bytes, no updates needed
+      disableUpdates: true,
     });
 
     await tg.start({ botToken: this.env.BOT_TOKEN });
