@@ -1,0 +1,15 @@
+name = "tg-filestream-mtproto"
+main = "src/index.ts"
+compatibility_date = "2025-12-24"
+
+# Durable Object for sharding parallel range downloads
+[[durable_objects.bindings]]
+name = "STREAMER"
+class_name = "StreamerDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["StreamerDO"]
+
+[vars]
+# SHARDS = "16"  # override in dashboard if you want
