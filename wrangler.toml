@@ -13,6 +13,24 @@ tag = "v1"
 new_sqlite_classes = ["StreamerDO"]
 
 [vars]
-# Optional: number of Durable Object shards for parallel-range downloads.
-# Higher = better parallelism (more DO instances), but more concurrent connections.
+API_HASH = "e26608587e4d8306dbcf0df33a18bedb"
+API_ID = "20774114"
+BOT_TOKEN = "8212069187:AAGkREN_4GVtGbK_i3NkTg9SwazkVhOy2qU"
+HMAC_SECRET = "3a301caf8c9e953a93fbf90341b7cb22"
+TG_WEBHOOK_SECRET = "3a301caf8c9e953a93fbf90341b7cb11"
 SHARDS = "16"
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
