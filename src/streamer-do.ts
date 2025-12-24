@@ -2,6 +2,14 @@ import type { Env, TokenPayloadV1 } from "./types";
 import { verifyToken, nowUnix } from "./utils/crypto";
 import { parseRange, formatContentDisposition, sanitizeFilename, guessExtFromMime } from "./utils/http";
 
+// mtcute uses WASM for some crypto primitives (AES-IGE, compression, hashes).
+// In Cloudflare Workers, the default WASM loader may try to resolve a local URL and crash with
+// "Invalid URL string". We fix it by importing the WASM bytes explicitly and passing them to the
+// crypto provider.
+import { SIMD_AVAILABLE } from "@mtcute/wasm";
+import mtcuteWasm from "@mtcute/wasm/mtcute.wasm";
+import mtcuteWasmSimd from "@mtcute/wasm/mtcute-simd.wasm";
+
 // IMPORTANT: This implementation uses MTProto to fetch the file bytes (upload.getFile),
 // so it is NOT limited by the 20MB Bot API download limit.
 
@@ -122,7 +130,23 @@ export class StreamerDO implements DurableObject {
       throw new Error("Could not find a platform implementation in @mtcute/web (expected WebPlatform).");
     }
 
-    const crypto = new CryptoCls();
+    const wasmInput = SIMD_AVAILABLE ? mtcuteWasmSimd : mtcuteWasm;
+
+    // IMPORTANT: Provide WASM bytes explicitly. Otherwise mtcute might try to resolve a local URL
+    // for the wasm blob and crash in Workers with "Invalid URL string".
+    let crypto: any;
+    try {
+      crypto = new CryptoCls({ wasmInput });
+    } catch {
+      // fallback in case the provider doesn't accept an options object
+      crypto = new CryptoCls();
+      if (crypto && typeof crypto === "object") {
+        // best-effort: some providers keep it on a private field
+        (crypto as any).wasmInput ??= wasmInput;
+        (crypto as any)._wasmInput ??= wasmInput;
+      }
+    }
+
     // some providers need async init (safe no-op if missing)
     if (typeof (crypto as any).initialize === "function") {
       await (crypto as any).initialize();
